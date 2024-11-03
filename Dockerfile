@@ -13,8 +13,7 @@ RUN apt-get -y install python3 python3-pip git
 RUN apt-get install -y --allow-change-held-packages \
     libcudnn8-dev\
     libcudnn8\
-    libnvinfer-dev\
-    tensorrt 
+    libnvinfer-dev 
 
 RUN pip3 install --upgrade pip
 
