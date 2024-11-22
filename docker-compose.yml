@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  jupyterlab:
+    build: .
+    image: jupyterlab-custom
+    container_name: jupyterlab_container
+    ports:
+      - "8888:8888"
+    volumes:
+      - ./notebooks:/root/notebooks
+    environment:
+      - TZ=America/Chicago
+    restart: unless-stopped
