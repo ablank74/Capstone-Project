@@ -10,8 +10,21 @@ RUN apt-get -y update && apt-get -y upgrade
 
 RUN apt-get -y install python3 python3-pip git
 
-
 RUN pip3 install --upgrade pip
+
+# Install Python Packages
+RUN pip3 install pandas \
+    tqdm \
+    requests \
+    scikit-learn \
+    python-dotenv \
+    transformers \
+    torch \
+    sentencepiece \
+    nltk \
+    matplotlib \
+    imblearn \
+    xgboost
 
 RUN pip3 install jupyterlab
 
