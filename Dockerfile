@@ -27,7 +27,8 @@ RUN pip3 install pandas \
     matplotlib \
     imblearn \
     xgboost \
-    cupy
+    cupy \
+    numpy
 
 RUN pip3 install jupyterlab
 

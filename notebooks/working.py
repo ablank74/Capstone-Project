@@ -140,6 +140,63 @@ for name, pipeline in pipelines.items():
         'classification_report': classification_report(y_test, y_pred)
     }
 
+# Model Performance Visualization
+def plot_model_accuracies(results):
+    accuracies = [results[model]['accuracy'] for model in results.keys()]
+    model_names = list(results.keys())
+    
+    plt.figure(figsize=(10, 6))
+    plt.bar(model_names, accuracies)
+    plt.title('Model Accuracy Comparison')
+    plt.xlabel('Models')
+    plt.ylabel('Accuracy')
+    plt.xticks(rotation=45, ha='right')
+    plt.tight_layout()
+    
+    # Save the plot
+    plt.savefig('model_accuracies.png')
+    plt.close()
+    
+    # Print accuracies to console
+    print("\n--- Model Accuracy Comparison ---")
+    for model, accuracy in zip(model_names, accuracies):
+        print(f"{model}: {accuracy:.4f}")
+
+# Class Distribution Visualization
+def plot_class_distribution(df, column='IT Group'):
+    class_counts = df[column].value_counts()
+    
+    plt.figure(figsize=(15, 6))
+    class_counts.plot(kind='bar')
+    plt.title('Distribution of IT Groups')
+    plt.xlabel('IT Group')
+    plt.ylabel('Number of Tickets')
+    plt.xticks(rotation=45, ha='right')
+    plt.tight_layout()
+    
+    # Save the plot
+    plt.savefig('class_distribution.png')
+    plt.close()
+    
+    # Print class distribution to console
+    print("\n--- Class Distribution ---")
+    print(class_counts)
+
+# Comprehensive Results Printing
+def print_detailed_results(results):
+    print("\n--- Detailed Model Performance ---")
+    for name, result in results.items():
+        print(f"\n{name} Model:")
+        print(f"Accuracy: {result['accuracy']:.4f}")
+        print("Classification Report:")
+        print(result['classification_report'])
+
+# After training traditional ML models
+print_detailed_results(results)
+plot_model_accuracies(results)
+plot_class_distribution(df)
+
+print("Training Transformer models...")
 # Train Transformer models
 transformer_models = [
     'bert-base-uncased',
@@ -175,17 +232,6 @@ print("\n--- Transformer Model Performance ---")
 for name, result in transformer_results.items():
     # Note: Transformer performance will be printed during training
     print(f"{name} training completed")
-
-# Visualization remains the same
-plt.figure(figsize=(10, 6))
-accuracies = [results[model]['accuracy'] for model in pipelines.keys()]
-plt.bar(list(pipelines.keys()), accuracies)
-plt.title('Traditional ML Model Accuracy Comparison')
-plt.xlabel('Models')
-plt.ylabel('Accuracy')
-plt.xticks(rotation=45, ha='right')
-plt.tight_layout()
-plt.show()
 
 # Optional: Comparative Analysis Function
 def compare_model_predictions(text, models_dict):
@@ -223,19 +269,131 @@ print("\nComparative Predictions for Sample Text:")
 for model, prediction in comparative_predictions.items():
     print(f"{model}: {prediction}")
 
-print("Visualizing Class Distribution...")
-# Visualize class distribution
-plt.figure(figsize=(15, 6))
-df['IT Group'].value_counts().plot(kind='bar')
-plt.title('Distribution of IT Groups')
-plt.xlabel('IT Group')
-plt.ylabel('Number of Tickets')
-plt.xticks(rotation=45, ha='right')
-plt.tight_layout()
-plt.show()  # Display the plot
-
 print("Clearing Memory...")
 # Clear memory
 gc.collect()
 
 print("Done!")
+
+def transformer_classification(df, model_name, max_len=512, batch_size=16, epochs=3):
+    """
+    Train a transformer model for text classification
+    
+    Args:
+        df (pd.DataFrame): Input dataframe
+        model_name (str): Name of the pre-trained model
+        max_len (int): Maximum sequence length
+        batch_size (int): Training batch size
+        epochs (int): Number of training epochs
+    
+    Returns:
+        tuple: (trained_model, tokenizer, label_encoder)
+    """
+    # Prepare label encoder
+    le = LabelEncoder()
+    labels = le.fit_transform(df['IT Group'])
+    num_classes = len(np.unique(labels))
+    
+    # Prepare text data
+    texts = df['combined'].tolist()
+    
+    # Split data
+    X_train, X_test, y_train, y_test = train_test_split(
+        texts, labels, test_size=0.2, random_state=42
+    )
+    
+    # Load tokenizer and model
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    model = AutoModelForSequenceClassification.from_pretrained(
+        model_name, 
+        num_labels=num_classes
+    ).to(device)
+    
+    # Tokenize data
+    train_encodings = tokenizer(
+        X_train, 
+        truncation=True, 
+        padding=True, 
+        max_length=max_len
+    )
+    test_encodings = tokenizer(
+        X_test, 
+        truncation=True, 
+        padding=True, 
+        max_length=max_len
+    )
+    
+    # Create torch datasets
+    train_dataset = torch.utils.data.TensorDataset(
+        torch.tensor(train_encodings['input_ids']),
+        torch.tensor(train_encodings['attention_mask']),
+        torch.tensor(y_train)
+    )
+    test_dataset = torch.utils.data.TensorDataset(
+        torch.tensor(test_encodings['input_ids']),
+        torch.tensor(test_encodings['attention_mask']),
+        torch.tensor(y_test)
+    )
+    
+    # DataLoaders
+    train_loader = torch.utils.data.DataLoader(
+        train_dataset, batch_size=batch_size, shuffle=True
+    )
+    test_loader = torch.utils.data.DataLoader(
+        test_dataset, batch_size=batch_size, shuffle=False
+    )
+    
+    # Optimizer and scheduler
+    optimizer = AdamW(model.parameters(), lr=5e-5)
+    total_steps = len(train_loader) * epochs
+    scheduler = get_linear_schedule_with_warmup(
+        optimizer, 
+        num_warmup_steps=0, 
+        num_training_steps=total_steps
+    )
+    
+    # Training loop
+    model.train()
+    for epoch in range(epochs):
+        total_loss = 0
+        for batch in train_loader:
+            optimizer.zero_grad()
+            input_ids = batch[0].to(device)
+            attention_mask = batch[1].to(device)
+            labels = batch[2].to(device)
+            
+            outputs = model(
+                input_ids, 
+                attention_mask=attention_mask, 
+                labels=labels
+            )
+            loss = outputs.loss
+            total_loss += loss.item()
+            
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            optimizer.step()
+            scheduler.step()
+        
+        print(f"Epoch {epoch+1}/{epochs}, Loss: {total_loss/len(train_loader)}")
+    
+    # Evaluation
+    model.eval()
+    predictions, true_labels = [], []
+    with torch.no_grad():
+        for batch in test_loader:
+            input_ids = batch[0].to(device)
+            attention_mask = batch[1].to(device)
+            labels = batch[2].to(device)
+            
+            outputs = model(input_ids, attention_mask=attention_mask)
+            _, preds = torch.max(outputs.logits, dim=1)
+            
+            predictions.extend(preds.cpu().numpy())
+            true_labels.extend(labels.cpu().numpy())
+    
+    # Print classification report
+    print(f"\n--- {model_name} Performance ---")
+    print(classification_report(true_labels, predictions))
+    
+    return model, tokenizer, le
