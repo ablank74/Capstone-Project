@@ -18,6 +18,13 @@ from sklearn.svm import LinearSVC
 from sklearn.metrics import classification_report, confusion_matrix
 import seaborn as sns
 import cupy as cp  # Add this import for GPU acceleration
+from torch.utils.data import Dataset, DataLoader
+from transformers import (
+    AutoTokenizer, 
+    AutoModelForSequenceClassification, 
+    AdamW, 
+    get_linear_schedule_with_warmup
+)
 
 # Check if CUDA is available
 if torch.cuda.is_available():
@@ -27,8 +34,8 @@ if torch.cuda.is_available():
     
     # XGBoost GPU configuration
     xgb_gpu_params = {
-        'tree_method': 'gpu_hist',  # Use GPU-accelerated tree method
-        'gpu_id': 0,  # Use the first GPU
+        'tree_method': 'hist',  # Use GPU-accelerated tree method
+        'device': 'cuda',  # Use the first GPU
         'predictor': 'gpu_predictor'  # Use GPU for prediction
     }
 else:
@@ -117,7 +124,8 @@ pipelines = {
     ])
 }
 
-# Train and evaluate models
+
+# Train traditional ML models
 results = {}
 for name, pipeline in pipelines.items():
     print(f"\nTraining {name} model...")
@@ -132,22 +140,88 @@ for name, pipeline in pipelines.items():
         'classification_report': classification_report(y_test, y_pred)
     }
 
-# Print results
-print("\nModel Performance Comparison:")
+# Train Transformer models
+transformer_models = [
+    'bert-base-uncased',
+    'roberta-base'
+]
+
+transformer_results = {}
+for model_name in transformer_models:
+    print(f"\n--- Training {model_name} ---")
+    try:
+        model, tokenizer, label_encoder = transformer_classification(
+            df, 
+            model_name, 
+            max_len=512, 
+            batch_size=16, 
+            epochs=3
+        )
+        transformer_results[model_name] = {
+            'model': model,
+            'tokenizer': tokenizer,
+            'label_encoder': label_encoder
+        }
+    except Exception as e:
+        print(f"Error training {model_name}: {e}")
+
+# Comprehensive Results Printing
+print("\n--- Traditional ML Model Performance ---")
 for name, result in results.items():
     print(f"{name}: Accuracy = {result['accuracy']:.4f}")
     print(f"Classification Report:\n{result['classification_report']}\n")
 
-# Visualize model accuracies
+print("\n--- Transformer Model Performance ---")
+for name, result in transformer_results.items():
+    # Note: Transformer performance will be printed during training
+    print(f"{name} training completed")
+
+# Visualization remains the same
 plt.figure(figsize=(10, 6))
 accuracies = [results[model]['accuracy'] for model in pipelines.keys()]
 plt.bar(list(pipelines.keys()), accuracies)
-plt.title('Model Accuracy Comparison')
+plt.title('Traditional ML Model Accuracy Comparison')
 plt.xlabel('Models')
 plt.ylabel('Accuracy')
 plt.xticks(rotation=45, ha='right')
 plt.tight_layout()
 plt.show()
+
+# Optional: Comparative Analysis Function
+def compare_model_predictions(text, models_dict):
+    """
+    Compare predictions across different models
+    
+    Args:
+        text (str): Input text to classify
+        models_dict (dict): Dictionary of models
+    
+    Returns:
+        dict: Predictions from different models
+    """
+    predictions = {}
+    
+    # Traditional ML Models
+    for name, pipeline in pipelines.items():
+        predictions[name] = pipeline.predict([text])[0]
+    
+    # Transformer Models
+    for name, model_info in transformer_results.items():
+        predictions[name] = predict_with_transformer(
+            text, 
+            model_info['model'], 
+            model_info['tokenizer'], 
+            model_info['label_encoder']
+        )
+    
+    return predictions
+
+# Example usage of comparative prediction
+sample_text = df['combined'].iloc[0]
+comparative_predictions = compare_model_predictions(sample_text, pipelines)
+print("\nComparative Predictions for Sample Text:")
+for model, prediction in comparative_predictions.items():
+    print(f"{model}: {prediction}")
 
 print("Visualizing Class Distribution...")
 # Visualize class distribution
