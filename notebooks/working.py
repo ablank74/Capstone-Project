@@ -12,24 +12,28 @@ from sklearn.metrics import accuracy_score
 import gc
 import matplotlib.pyplot as plt  # Importing matplotlib for plotting
 import numpy as np
+from sklearn.linear_model import LogisticRegression
+from sklearn.naive_bayes import MultinomialNB
+from sklearn.svm import LinearSVC
+from sklearn.metrics import classification_report, confusion_matrix
+import seaborn as sns
+import cupy as cp  # Add this import for GPU acceleration
 
 # Check if CUDA is available
 if torch.cuda.is_available():
     # Set device to the first CUDA device
     device = torch.device("cuda:0")
     print(f"Using device: {torch.cuda.get_device_name(0)}")
-
-    # Create random tensors
-    x = torch.randn(5000, 5000, device=device)
-    y = torch.randn(5000, 5000, device=device)
-
-    # Perform matrix multiplication
-    print("Performing matrix multiplication on GPU...")
-    z = torch.matmul(x, y)
-    print("Done with matrix multiplication.")
-
+    
+    # XGBoost GPU configuration
+    xgb_gpu_params = {
+        'tree_method': 'gpu_hist',  # Use GPU-accelerated tree method
+        'gpu_id': 0,  # Use the first GPU
+        'predictor': 'gpu_predictor'  # Use GPU for prediction
+    }
 else:
     print("CUDA is not available. Using CPU instead.")
+    xgb_gpu_params = {}
 
 # Load CSV
 print("Loading CSV...")
@@ -63,48 +67,87 @@ print("Combining Summary and Description...")
 df['combined'] = df[['Summary', 'Description']].fillna('').agg(' '.join, axis=1)
 
 print("Encoding Labels...")
-# Encode labels
+# Encode labels with consecutive integers
 le_it_group = LabelEncoder()
 df['IT Group'] = le_it_group.fit_transform(df['IT Group'])
 
-print("Unique classes in IT Group before encoding:", df['IT Group'].unique())
+# Ensure consecutive class labels
+unique_classes = np.sort(df['IT Group'].unique())
+class_mapping = {old: new for new, old in enumerate(unique_classes)}
+df['IT Group'] = df['IT Group'].map(class_mapping)
+
+print("Unique classes after remapping:", sorted(df['IT Group'].unique()))
 
 print("Splitting Data...")
 # Split data into train and test sets
 X_train, X_test, y_train, y_test = train_test_split(df['combined'], df['IT Group'], test_size=0.2, random_state=42)
 
-print("Creating and fitting Random Forest model...")
-# Create and fit Random Forest model
-pipeline_rf = Pipeline([('tfidf', TfidfVectorizer(max_features=10000)), ('clf', RandomForestClassifier(n_jobs=-1))])
-pipeline_rf.fit(X_train, y_train)
+# Ensure y_train has consecutive integers
+y_train = pd.Series(y_train).map(dict(zip(y_train.unique(), range(len(y_train.unique()))))).values
+y_test = pd.Series(y_test).map(dict(zip(y_test.unique(), range(len(y_test.unique()))))).values
 
-print("Creating and fitting XGBoost model...")
-# Create and fit XGBoost model
-# Get unique classes and their count
-unique_classes = np.unique(y_train)
-num_classes = len(unique_classes)
+print("Creating and fitting multiple models...")
+# Define pipelines for different classifiers
+pipelines = {
+    'RandomForest': Pipeline([
+        ('tfidf', TfidfVectorizer(max_features=10000)), 
+        ('clf', RandomForestClassifier(n_jobs=-1, random_state=42))
+    ]),
+    'XGBoost': Pipeline([
+        ('tfidf', TfidfVectorizer(max_features=10000)),
+        ('clf', XGBClassifier(
+            n_jobs=-1, 
+            random_state=42,
+            objective='multi:softmax',
+            num_class=len(np.unique(y_train)),
+            **xgb_gpu_params  # Add GPU parameters conditionally
+        ))
+    ]),
+    'Logistic Regression': Pipeline([
+        ('tfidf', TfidfVectorizer(max_features=10000)), 
+        ('clf', LogisticRegression(multi_class='multinomial', max_iter=1000, n_jobs=-1))
+    ]),
+    'Naive Bayes': Pipeline([
+        ('tfidf', TfidfVectorizer(max_features=10000)), 
+        ('clf', MultinomialNB())
+    ]),
+    'Linear SVC': Pipeline([
+        ('tfidf', TfidfVectorizer(max_features=10000)), 
+        ('clf', LinearSVC(random_state=42, max_iter=10000))
+    ])
+}
 
-xgb_pipeline = Pipeline([
-    ('tfidf', TfidfVectorizer(max_features=10000)),
-    ('clf', XGBClassifier(
-        n_jobs=-1, 
-        random_state=42,
-        objective='multi:softmax',  # Explicitly set multi-class classification
-        num_class=num_classes  # Dynamically set number of classes
-    ))
-])
-xgb_pipeline.fit(X_train, y_train)
+# Train and evaluate models
+results = {}
+for name, pipeline in pipelines.items():
+    print(f"\nTraining {name} model...")
+    pipeline.fit(X_train, y_train)
+    
+    print(f"Making predictions with {name}...")
+    y_pred = pipeline.predict(X_test)
+    
+    # Store results
+    results[name] = {
+        'accuracy': accuracy_score(y_test, y_pred),
+        'classification_report': classification_report(y_test, y_pred)
+    }
 
-print("Making Predictions...")
-# Predictions
-y_pred_rf = pipeline_rf.predict(X_test)
-y_pred_xgb = xgb_pipeline.predict(X_test)
+# Print results
+print("\nModel Performance Comparison:")
+for name, result in results.items():
+    print(f"{name}: Accuracy = {result['accuracy']:.4f}")
+    print(f"Classification Report:\n{result['classification_report']}\n")
 
-print("Comparing Accuracies...")
-# Compare accuracies
-print("\nModel Accuracy Comparison:")
-print(f"RandomForest: {accuracy_score(y_test, y_pred_rf):.4f}")
-print(f"XGBoost:     {accuracy_score(y_test, y_pred_xgb):.4f}")
+# Visualize model accuracies
+plt.figure(figsize=(10, 6))
+accuracies = [results[model]['accuracy'] for model in pipelines.keys()]
+plt.bar(list(pipelines.keys()), accuracies)
+plt.title('Model Accuracy Comparison')
+plt.xlabel('Models')
+plt.ylabel('Accuracy')
+plt.xticks(rotation=45, ha='right')
+plt.tight_layout()
+plt.show()
 
 print("Visualizing Class Distribution...")
 # Visualize class distribution

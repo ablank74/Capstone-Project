@@ -12,6 +12,8 @@ RUN apt-get -y install python3 python3-pip git
 
 RUN pip3 install --upgrade pip
 
+RUN pip3 install -U setuptools pip
+
 # Install Python Packages
 RUN pip3 install pandas \
     tqdm \
@@ -24,7 +26,8 @@ RUN pip3 install pandas \
     nltk \
     matplotlib \
     imblearn \
-    xgboost
+    xgboost \
+    cupy
 
 RUN pip3 install jupyterlab
 
