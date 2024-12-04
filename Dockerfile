@@ -28,9 +28,10 @@ RUN pip3 install pandas \
     imblearn \
     xgboost \
     cupy \
-    numpy
+    seaborn
 
 RUN pip3 install jupyterlab
+
 
 COPY jupyter_notebook_config.py /root/.jupyter/
 

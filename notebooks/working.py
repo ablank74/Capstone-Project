@@ -44,7 +44,7 @@ else:
 
 # Load CSV
 print("Loading CSV...")
-df = pd.read_csv('dataframe2024-11-21_04-29.csv')
+df = pd.read_csv('dataframe2024-12-03_15-13.csv')
 
 # Data Cleaning
 print("Cleaning Data...")
@@ -196,86 +196,7 @@ print_detailed_results(results)
 plot_model_accuracies(results)
 plot_class_distribution(df)
 
-print("Training Transformer models...")
-# Train Transformer models
-transformer_models = [
-    'bert-base-uncased',
-    'roberta-base'
-]
-
-transformer_results = {}
-for model_name in transformer_models:
-    print(f"\n--- Training {model_name} ---")
-    try:
-        model, tokenizer, label_encoder = transformer_classification(
-            df, 
-            model_name, 
-            max_len=512, 
-            batch_size=16, 
-            epochs=3
-        )
-        transformer_results[model_name] = {
-            'model': model,
-            'tokenizer': tokenizer,
-            'label_encoder': label_encoder
-        }
-    except Exception as e:
-        print(f"Error training {model_name}: {e}")
-
-# Comprehensive Results Printing
-print("\n--- Traditional ML Model Performance ---")
-for name, result in results.items():
-    print(f"{name}: Accuracy = {result['accuracy']:.4f}")
-    print(f"Classification Report:\n{result['classification_report']}\n")
-
-print("\n--- Transformer Model Performance ---")
-for name, result in transformer_results.items():
-    # Note: Transformer performance will be printed during training
-    print(f"{name} training completed")
-
-# Optional: Comparative Analysis Function
-def compare_model_predictions(text, models_dict):
-    """
-    Compare predictions across different models
-    
-    Args:
-        text (str): Input text to classify
-        models_dict (dict): Dictionary of models
-    
-    Returns:
-        dict: Predictions from different models
-    """
-    predictions = {}
-    
-    # Traditional ML Models
-    for name, pipeline in pipelines.items():
-        predictions[name] = pipeline.predict([text])[0]
-    
-    # Transformer Models
-    for name, model_info in transformer_results.items():
-        predictions[name] = predict_with_transformer(
-            text, 
-            model_info['model'], 
-            model_info['tokenizer'], 
-            model_info['label_encoder']
-        )
-    
-    return predictions
-
-# Example usage of comparative prediction
-sample_text = df['combined'].iloc[0]
-comparative_predictions = compare_model_predictions(sample_text, pipelines)
-print("\nComparative Predictions for Sample Text:")
-for model, prediction in comparative_predictions.items():
-    print(f"{model}: {prediction}")
-
-print("Clearing Memory...")
-# Clear memory
-gc.collect()
-
-print("Done!")
-
-def transformer_classification(df, model_name, max_len=512, batch_size=16, epochs=3):
+def transformer_classification(df, model_name, max_len=512, batch_size=8, epochs=3):
     """
     Train a transformer model for text classification
     
@@ -352,11 +273,12 @@ def transformer_classification(df, model_name, max_len=512, batch_size=16, epoch
         num_training_steps=total_steps
     )
     
-    # Training loop
+    # Training loop with logging
     model.train()
     for epoch in range(epochs):
+        print(f"Epoch {epoch+1}/{epochs}")
         total_loss = 0
-        for batch in train_loader:
+        for step, batch in enumerate(train_loader):
             optimizer.zero_grad()
             input_ids = batch[0].to(device)
             attention_mask = batch[1].to(device)
@@ -374,8 +296,11 @@ def transformer_classification(df, model_name, max_len=512, batch_size=16, epoch
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
             scheduler.step()
-        
-        print(f"Epoch {epoch+1}/{epochs}, Loss: {total_loss/len(train_loader)}")
+            
+            if step % 10 == 0:
+                print(f"Epoch {epoch+1}/{epochs}, Step {step}/{len(train_loader)}, Loss: {loss.item()}")
+
+        print(f"Epoch {epoch+1}/{epochs}, Average Loss: {total_loss/len(train_loader)}")
     
     # Evaluation
     model.eval()
@@ -397,3 +322,120 @@ def transformer_classification(df, model_name, max_len=512, batch_size=16, epoch
     print(classification_report(true_labels, predictions))
     
     return model, tokenizer, le
+
+print("Training Transformer models...")
+# Train Transformer models
+transformer_models = [
+    'bert-base-uncased',
+    'roberta-base'
+]
+
+transformer_results = {}
+for model_name in transformer_models:
+    print(f"\n--- Training {model_name} ---")
+    try:
+        model, tokenizer, label_encoder = transformer_classification(
+            df, 
+            model_name, 
+            max_len=512, 
+            batch_size=8, 
+            epochs=3
+        )
+        transformer_results[model_name] = {
+            'model': model,
+            'tokenizer': tokenizer,
+            'label_encoder': label_encoder
+        }
+    except Exception as e:
+        print(f"Error training {model_name}: {e}")
+
+# Comprehensive Results Printing
+print("\n--- Traditional ML Model Performance ---")
+for name, result in results.items():
+    print(f"{name}: Accuracy = {result['accuracy']:.4f}")
+    print(f"Classification Report:\n{result['classification_report']}\n")
+
+print("\n--- Transformer Model Performance ---")
+for name, result in transformer_results.items():
+    # Note: Transformer performance will be printed during training
+    print(f"{name} training completed")
+
+# Optional: Comparative Analysis Function
+def compare_model_predictions(text, models_dict):
+    """
+    Compare predictions across different models
+    
+    Args:
+        text (str): Input text to classify
+        models_dict (dict): Dictionary of models
+    
+    Returns:
+        dict: Predictions from different models
+    """
+    predictions = {}
+    
+    # Traditional ML Models
+    for name, pipeline in pipelines.items():
+        predictions[name] = pipeline.predict([text])[0]
+    
+    # Transformer Models
+    for name, model_info in transformer_results.items():
+        predictions[name] = predict_with_transformer(
+            text, 
+            model_info['model'], 
+            model_info['tokenizer'], 
+            model_info['label_encoder']
+        )
+    
+    return predictions
+
+# Example usage of comparative prediction
+sample_text = df['combined'].iloc[0]
+comparative_predictions = compare_model_predictions(sample_text, pipelines)
+print("\nComparative Predictions for Sample Text:")
+for model, prediction in comparative_predictions.items():
+    print(f"{model}: {prediction}")
+
+print("Clearing Memory...")
+# Clear memory
+gc.collect()
+
+print("Done!")
+
+def predict_with_transformer(text, model, tokenizer, label_encoder, max_len=512):
+    """
+    Make a prediction using a transformer model.
+    
+    Args:
+        text (str): The input text to classify.
+        model (transformers.PreTrainedModel): The transformer model.
+        tokenizer (transformers.PreTrainedTokenizer): The tokenizer for the model.
+        label_encoder (LabelEncoder): The label encoder used for encoding labels.
+        max_len (int): Maximum sequence length for the input text.
+    
+    Returns:
+        int: The predicted class label.
+    """
+    # Tokenize the input text
+    encoding = tokenizer(
+        text,
+        truncation=True,
+        padding='max_length',
+        max_length=max_len,
+        return_tensors='pt'
+    )
+    
+    # Move tensors to the appropriate device
+    input_ids = encoding['input_ids'].to(device)
+    attention_mask = encoding['attention_mask'].to(device)
+    
+    # Make prediction
+    model.eval()
+    with torch.no_grad():
+        outputs = model(input_ids, attention_mask=attention_mask)
+        _, prediction = torch.max(outputs.logits, dim=1)
+    
+    # Decode the predicted label
+    predicted_label = label_encoder.inverse_transform(prediction.cpu().numpy())[0]
+    
+    return predicted_label
