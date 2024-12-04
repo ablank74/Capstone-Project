@@ -1,4 +1,4 @@
 notebooks/.env
 data/ibm_hr_dataset.csv
-dataframe2024-11-21_04-29.csv
+*.csv
 .env
