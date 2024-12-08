@@ -40,8 +40,6 @@ if torch.cuda.is_available():
     device = torch.device("cuda:0")
     print(f"Using device: {torch.cuda.get_device_name(0)}")
     xgb_gpu_params = {
-        'tree_method': 'hist',
-        'device': 'cuda',
         'predictor': 'gpu_predictor'
     }
 else:
@@ -55,7 +53,7 @@ else:
 
 # %% [code]
 print("Loading CSV...")
-df = pd.read_csv('dataframe.csv')
+df = pd.read_csv('dataframe2.csv')
 
 # Examine data structure
 print("\nDataframe Info:")
@@ -185,13 +183,14 @@ pipelines = {
             n_jobs=-1, 
             random_state=42,
             objective='multi:softmax',
-            num_class=len(np.unique(y_train)),  # Make sure this matches the number of classes
+            num_class=len(np.unique(y_train)),
+            tree_method='gpu_hist' if torch.cuda.is_available() else 'hist',
             **xgb_gpu_params
         ))
     ]),
     'Logistic Regression': Pipeline([
         ('tfidf', TfidfVectorizer(max_features=10000)), 
-        ('clf', LogisticRegression(multi_class='multinomial', max_iter=1000, n_jobs=-1))
+        ('clf', LogisticRegression(max_iter=1000, n_jobs=-1))
     ]),
     'Naive Bayes': Pipeline([
         ('tfidf', TfidfVectorizer(max_features=10000)), 
@@ -462,3 +461,259 @@ for name in all_results:
     print(f"\n{name} Classification Report:")
     print(all_results[name]['classification_report']) 
 # %%
+# %% [markdown]
+# ## Model Collection
+# Collect and organize trained models for analysis
+
+# %% [code]
+def collect_trained_models(traditional_models, transformer_results):
+    """
+    Collect and organize all trained models for analysis
+    Returns a dictionary of model name to model object
+    """
+    collected_models = {}
+    
+    # Collect traditional ML models
+    for name, pipeline in traditional_models.items():
+        collected_models[f"traditional_{name}"] = pipeline
+    
+    # Collect transformer models
+    for name, result in transformer_results.items():
+        if 'model' in result:
+            collected_models[f"transformer_{name}"] = result['model']
+    
+    return collected_models
+
+# Example of collecting models
+print("Collecting trained models...")
+all_trained_models = collect_trained_models(pipelines, transformer_results)
+print(f"Collected {len(all_trained_models)} models:")
+for model_name in all_trained_models:
+    print(f"- {model_name}")
+
+# %% [markdown]
+# ## M365 Ticket Analysis
+# Analyze tickets specifically for M365 group and provide confidence scores
+
+# %% [code]
+def analyze_m365_tickets(text, models, tokenizer, label_encoder):
+    """
+    Analyze tickets for M365 group assignment with confidence scores
+    Returns predictions from all models with confidence scores
+    """
+    results = []
+    
+    # Get M365 group index
+    m365_group_idx = None
+    for idx, group in enumerate(label_encoder.classes_):
+        if 'M365' in str(group):
+            m365_group_idx = idx
+            break
+    
+    if m365_group_idx is None:
+        raise ValueError("M365 group not found in training data")
+
+    # Get predictions from each model
+    for model_name, model in models.items():
+        if model_name.startswith('traditional_'):
+            # Handle traditional ML models (using scikit-learn pipeline)
+            probabilities = model.predict_proba([text])[0]
+            pred_class = model.predict([text])[0]
+            
+        else:  # transformer models
+            # Prepare input
+            inputs = tokenizer(
+                text,
+                truncation=True,
+                padding=True,
+                max_length=256,
+                return_tensors="pt"
+            ).to(device)
+            
+            model.eval()
+            with torch.no_grad():
+                outputs = model(**inputs)
+                logits = outputs.logits
+                probabilities = torch.softmax(logits, dim=1)[0].cpu().numpy()
+                pred_class = np.argmax(probabilities)
+        
+        # Get confidence scores
+        confidence = probabilities[pred_class]
+        m365_confidence = probabilities[m365_group_idx]
+        
+        results.append({
+            'model': model_name,
+            'predicted_group': label_encoder.inverse_transform([pred_class])[0],
+            'confidence': float(confidence),  # Convert numpy/tensor values to float
+            'm365_confidence': float(m365_confidence),
+            'is_m365': pred_class == m365_group_idx,
+            'should_be_m365': float(m365_confidence) > 0.3  # Threshold can be adjusted
+        })
+    
+    return results
+
+def fine_tune_model(model, tokenizer, train_texts, train_labels, learning_rate=2e-5, epochs=3):
+    """
+    Fine-tune a transformer model on new data
+    """
+    # Prepare dataset
+    train_encodings = tokenizer(
+        train_texts,
+        truncation=True,
+        padding=True,
+        max_length=256,
+        return_tensors="pt"
+    )
+    
+    train_dataset = torch.utils.data.TensorDataset(
+        train_encodings['input_ids'],
+        train_encodings['attention_mask'],
+        torch.tensor(train_labels)
+    )
+    
+    train_loader = torch.utils.data.DataLoader(
+        train_dataset,
+        batch_size=4,
+        shuffle=True
+    )
+    
+    # Setup training
+    optimizer = AdamW(model.parameters(), lr=learning_rate)
+    total_steps = len(train_loader) * epochs
+    scheduler = get_linear_schedule_with_warmup(
+        optimizer,
+        num_warmup_steps=0,
+        num_training_steps=total_steps
+    )
+    
+    # Training loop
+    model.train()
+    for epoch in range(epochs):
+        total_loss = 0
+        progress_bar = tqdm(train_loader, desc=f"Fine-tuning Epoch {epoch+1}/{epochs}")
+        
+        for batch in progress_bar:
+            optimizer.zero_grad()
+            
+            input_ids = batch[0].to(device)
+            attention_mask = batch[1].to(device)
+            labels = batch[2].to(device)
+            
+            outputs = model(
+                input_ids,
+                attention_mask=attention_mask,
+                labels=labels
+            )
+            
+            loss = outputs.loss
+            total_loss += loss.item()
+            
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            optimizer.step()
+            scheduler.step()
+            
+            progress_bar.set_postfix({'loss': f"{loss.item():.4f}"})
+        
+        avg_loss = total_loss / len(train_loader)
+        print(f"Epoch {epoch+1} completed. Average loss: {avg_loss:.4f}")
+    
+    return model
+
+# Example usage for M365 analysis
+def analyze_jira_tickets_m365(jira_tickets, models, tokenizer, label_encoder):
+    """
+    Analyze a batch of Jira tickets for M365 group assignment
+    """
+    results = []
+    
+    for ticket in tqdm(jira_tickets, desc="Analyzing tickets"):
+        # Combine summary and description
+        text = f"{ticket.get('summary', '')} {ticket.get('description', '')}"
+        text = clean_text(text)
+        
+        # Get predictions and confidence scores
+        analysis = analyze_m365_tickets(text, models, tokenizer, label_encoder)
+        
+        # Aggregate results
+        consensus = {
+            'ticket_key': ticket.get('key'),
+            'text': text,
+            'model_predictions': analysis,
+            'consensus_is_m365': sum(1 for x in analysis if x['is_m365']) > len(analysis)/2,
+            'average_m365_confidence': sum(x['m365_confidence'] for x in analysis) / len(analysis)
+        }
+        
+        results.append(consensus)
+    
+    return results
+
+# Example of how to use the fine-tuning
+def prepare_fine_tuning_data(verified_tickets, label_encoder):
+    """
+    Prepare data for fine-tuning from verified tickets
+    """
+    texts = []
+    labels = []
+    
+    for ticket in verified_tickets:
+        text = f"{ticket['summary']} {ticket['description']}"
+        text = clean_text(text)
+        texts.append(text)
+        labels.append(label_encoder.transform([ticket['group']])[0])
+    
+    return texts, labels
+
+# %% [code]
+
+# Example usage
+def get_default_tokenizer():
+    """Get a default tokenizer for traditional models"""
+    return TfidfVectorizer(max_features=10000)
+
+# Example of analyzing tickets
+print("\nAnalyzing example tickets...")
+# Get tokenizer - use BERT tokenizer for transformer models, TF-IDF for traditional
+default_tokenizer = get_default_tokenizer()
+bert_tokenizer = None
+if 'transformer_bert-base-uncased' in all_trained_models:
+    bert_tokenizer = AutoTokenizer.from_pretrained('bert-base-uncased')
+
+# Analyze a single ticket
+ticket_text = "Some M365 related issue description"
+results = analyze_m365_tickets(
+    ticket_text, 
+    all_trained_models,
+    bert_tokenizer or default_tokenizer,
+    le_it_group  # Using the label encoder from earlier in the code
+)
+
+# Print results
+print("\nSingle ticket analysis results:")
+for result in results:
+    print(f"\nModel: {result['model']}")
+    print(f"Predicted Group: {result['predicted_group']}")
+    print(f"Confidence: {result['confidence']:.3f}")
+    print(f"M365 Confidence: {result['m365_confidence']:.3f}")
+    print(f"Should be M365: {result['should_be_m365']}")
+
+# Analyze multiple tickets
+jira_tickets = [
+    {"key": "TICKET-1", "summary": "M365 issue", "description": "Details..."},
+    {"key": "TICKET-2", "summary": "Another issue", "description": "More details..."}
+]
+batch_results = analyze_jira_tickets_m365(
+    jira_tickets,
+    all_trained_models,
+    bert_tokenizer or default_tokenizer,
+    le_it_group
+)
+
+# Print batch results
+print("\nBatch analysis results:")
+for result in batch_results:
+    print(f"\nTicket: {result['ticket_key']}")
+    print(f"Consensus is M365: {result['consensus_is_m365']}")
+    print(f"Average M365 confidence: {result['average_m365_confidence']:.3f}")
+# %%
+
