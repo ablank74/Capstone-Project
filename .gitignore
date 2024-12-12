@@ -3,4 +3,4 @@ data/ibm_hr_dataset.csv
 *.csv
 .env
 *.pth
-notebooks/roberta_ticket_classifier/*
+notebooks/roberta_classifier/*
