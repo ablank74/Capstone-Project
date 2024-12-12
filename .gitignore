@@ -4,3 +4,4 @@ data/ibm_hr_dataset.csv
 .env
 *.pth
 notebooks/roberta_classifier/*
+notebooks/.ipynb_checkpoints/*
