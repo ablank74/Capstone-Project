@@ -1,0 +1,30 @@
+# Core data processing and analysis
+pandas
+numpy
+scikit-learn
+torch
+transformers
+tqdm
+
+# API and HTTP requests
+requests
+python-dotenv
+
+# NLP processing
+nltk
+
+# Data visualization
+matplotlib
+seaborn
+
+# Machine learning
+xgboost
+
+# Jupyter environment
+jupyter
+notebook
+ipykernel
+
+# Optional but recommended for GPU support
+# Note: cuda toolkit should be installed separately
+torch>=2.0.0 
